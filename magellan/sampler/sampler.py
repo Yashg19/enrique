@@ -1,6 +1,8 @@
 import math
 import numpy as np
 import sys
+from datetime import datetime
+import time
 from magellan.core.mtable import MTable
 
 def _get_stop_words():
@@ -61,10 +63,21 @@ def _get_str_cols(table):
     cols = list(table.columns[table.dtypes==object])
     return cols
 
+#YG Changes:
+# get string column list
+def _get_str_cols_list(table):
+    cols = list(table.columns[table.dtypes==object])
+    col_list = []
+    for x in cols:
+        col_list.append(table.columns.get_loc(x))
+    return col_list
+
+'''
 # create inverted index from token to position
 def _inv_index(table):
     stop_words = set(_get_stop_words())
     str_cols = _get_str_cols(table)
+    #str_cols_ix = _get_str_cols_list(table)
     n = len(table)
     key_pos = dict(zip(range(n), range(n)))
     inv_index = dict()
@@ -73,8 +86,36 @@ def _inv_index(table):
         # get values from string columns
         val = v[str_cols]
         # concatenate them
-        s = ' '.join(val).lower()
+        s = ' '.join(str(v) for v in val).lower()
         # tokenize them
+        s = set(s.split())
+        s = s.difference(stop_words)
+        for token in s:
+            lst = inv_index.get(token, None)
+            if lst is None:
+                inv_index[token] = [pos]
+            else:
+                lst.append(pos)
+                inv_index[token] = lst
+        pos += 1
+    return inv_index
+'''
+
+# create inverted index from token to position                                                                                                                                                            
+def _inv_index(table):
+    stop_words = set(_get_stop_words())
+    str_cols_ix = _get_str_cols_list(table)                                                                                                                                                                
+    n = len(table)
+    key_pos = dict(zip(range(n), range(n)))
+    inv_index = dict()
+    pos = 0
+    for row in table.itertuples():                                                                                                                                                                         
+        s = ''                                                                                                                                                                                             
+        for ix in str_cols_ix:                                                                                                                                                                             
+            if type(row[ix+1]) is str:                                                                                                                                                                     
+                s = s + row[ix+1].lower() + ' '                                                                                                                                                            
+        s = s.rstrip()                                                                                                                                                                                     
+        # tokenize them                                                                                                                                                                                  
         s = set(s.split())
         s = s.difference(stop_words)
         for token in s:
@@ -92,10 +133,18 @@ def _probe_index(b_table, y, s_tbl_sz, s_inv_index):
     y_pos = math.floor(y/2)
     h_table = set()
     stop_words = set(_get_stop_words())
-    str_cols = _get_str_cols(b_table)
-    for k, v in b_table.iterrows():
-        val = v[str_cols]
-        s = set(' '.join(val).lower().split())
+    #str_cols = _get_str_cols(b_table)
+    str_cols_ix = _get_str_cols_list(b_table)
+    #for k, v in b_table.iterrows():
+    for row in b_table.itertuples():
+        s = ''
+        #val = v[str_cols]
+        #s = set(' '.join(str(v) for v in val).lower().split())
+        for ix in str_cols_ix:
+            if type(row[ix+1]) is str:
+                s += row[ix+1].lower() + ' '
+        s = s.rstrip()
+        s = set(s.split())
         s = s.difference(stop_words)
         m = set()
         for token in s:
@@ -118,11 +167,16 @@ def _probe_index(b_table, y, s_tbl_sz, s_inv_index):
 # down sample two tables : based on sanjib's index based solution
 def down_sample(ltable, rtable, size, y):
     s_table, b_table, is_swapped = _order_tables(ltable, rtable)
+    t1 = time.time()
     s_inv_index = _inv_index(s_table)
+    inv_index_time = int(time.time() - t1)
     b_sample_size = min(math.floor(size/y), len(b_table))
     b_tbl_indices = list(np.random.choice(len(b_table), b_sample_size, replace=False))
+    t1 = time.time()
     s_tbl_indices = _probe_index(b_table.ix[b_tbl_indices], y,
                                  len(s_table), s_inv_index)
+    probe_index_time = int(time.time() - t1)
+
     s_tbl_indices = list(s_tbl_indices)
     if is_swapped:
         s_tbl_indices, b_tbl_indices = b_tbl_indices, s_tbl_indices
@@ -130,7 +184,7 @@ def down_sample(ltable, rtable, size, y):
     l_sampled.properties = ltable.properties
     r_sampled = MTable(rtable.iloc[list(b_tbl_indices)], key=rtable.get_key())
     r_sampled.properties = rtable.properties
-    return l_sampled, r_sampled
+    return l_sampled, r_sampled, inv_index_time, probe_index_time
 
 # sample one table using random sampling
 def sample_table(table, size, replace=False):
